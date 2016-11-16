@@ -8,6 +8,7 @@
 #include <cmath>
 #include <iostream>
 
+
 namespace dlib
 {
 
@@ -83,6 +84,87 @@ namespace dlib
     private:
         __m128 x;
     };
+#elif defined(DLIB_HAVE_NEON)	
+    class simd4f
+    {
+    public:
+        typedef float type;
+
+        inline simd4f() {}
+        inline simd4f(float f) { x = vdupq_n_f32(f); }
+        inline simd4f(float r0, float r1, float r2, float r3)
+		{
+			float __attribute__ ((aligned (16))) data[4] = { r0, r1, r2, r3 };
+			x = vld1q_f32(data); 
+		}
+        inline simd4f(const float32x4_t& val):x(val) {}
+        inline simd4f(const simd4i& val):x(vcvtq_f32_s32(val)) {}
+
+        inline simd4f& operator=(const simd4i& val)
+        {
+            x = simd4f(val);
+            return *this;
+        }
+
+        inline simd4f& operator=(const float& val)
+        {
+            x = simd4f(val);
+            return *this;
+        }
+
+        inline simd4f& operator=(const float32x4_t& val)
+        {
+            x = val;
+            return *this;
+        }
+
+        inline operator float32x4_t() const { return x; }
+
+        // truncate to 32bit integers
+        inline operator int32x4_t() const { return vcvtq_s32_f32(x); }
+
+        inline void load_aligned(const type* ptr)  { x = vld1q_f32(ptr); }
+        inline void store_aligned(type* ptr) const { vst1q_f32(ptr, x); }
+        inline void load(const type* ptr)          { x = vld1q_f32(ptr); }
+        inline void store(type* ptr)         const { vst1q_f32(ptr, x); }
+
+        inline unsigned int size() const { return 4; }
+        inline float operator[](unsigned int idx) const 
+        {
+            float temp[4];
+            store(temp);
+            return temp[idx];
+        }
+
+    private:
+        float32x4_t x;
+    };
+
+    class simd4f_bool
+    {
+    public:
+        typedef float type;
+
+        inline simd4f_bool() {}
+        inline simd4f_bool(const float32x4_t& val):x(val) {}
+        inline simd4f_bool(float r0, float r1, float r2, float r3)
+		{
+			float __attribute__ ((aligned (16))) data[4] = { r0, r1, r2, r3 };
+			x = vld1q_f32(data); 
+		}
+
+        inline simd4f_bool& operator=(const float32x4_t& val)
+        {
+            x = val;
+            return *this;
+        }
+
+        inline operator float32x4_t() const { return x; }
+
+
+    private:
+        float32x4_t x;
+    };	
 #else
     class simd4f
     {
@@ -189,7 +271,9 @@ namespace dlib
     inline simd4f operator+ (const simd4f& lhs, const simd4f& rhs) 
     { 
 #ifdef DLIB_HAVE_SSE2
-        return _mm_add_ps(lhs, rhs); 
+        return _mm_add_ps(lhs, rhs);
+#elif defined(DLIB_HAVE_NEON)	
+		return vaddq_f32(lhs, rhs);
 #else
         return simd4f(lhs[0]+rhs[0],
                       lhs[1]+rhs[1],
@@ -198,14 +282,16 @@ namespace dlib
 #endif
     }
     inline simd4f& operator+= (simd4f& lhs, const simd4f& rhs) 
-    { lhs = lhs + rhs; return lhs; }
+    { return lhs = lhs + rhs; return lhs;}
 
 // ----------------------------------------------------------------------------------------
 
     inline simd4f operator- (const simd4f& lhs, const simd4f& rhs) 
     { 
 #ifdef DLIB_HAVE_SSE2
-        return _mm_sub_ps(lhs, rhs); 
+        return _mm_sub_ps(lhs, rhs);
+#elif defined(DLIB_HAVE_NEON)
+		return vsubq_f32(lhs, rhs);
 #else
         return simd4f(lhs[0]-rhs[0],
                       lhs[1]-rhs[1],
@@ -214,7 +300,7 @@ namespace dlib
 #endif
     }
     inline simd4f& operator-= (simd4f& lhs, const simd4f& rhs) 
-    { lhs = lhs - rhs; return lhs; }
+    { return lhs = lhs - rhs; return lhs;}
 
 // ----------------------------------------------------------------------------------------
 
@@ -222,6 +308,8 @@ namespace dlib
     { 
 #ifdef DLIB_HAVE_SSE2
         return _mm_mul_ps(lhs, rhs); 
+#elif defined(DLIB_HAVE_NEON)
+		return vmulq_f32(lhs, rhs);
 #else
         return simd4f(lhs[0]*rhs[0],
                       lhs[1]*rhs[1],
@@ -230,7 +318,7 @@ namespace dlib
 #endif
     }
     inline simd4f& operator*= (simd4f& lhs, const simd4f& rhs) 
-    { lhs = lhs * rhs; return lhs; }
+    { return lhs = lhs * rhs; return lhs;}
 
 // ----------------------------------------------------------------------------------------
 
@@ -238,6 +326,20 @@ namespace dlib
     { 
 #ifdef DLIB_HAVE_SSE2
         return _mm_div_ps(lhs, rhs); 
+#elif defined(DLIB_HAVE_NEON)
+#if 1 //may be not so accuracy ( ref. http://rcl-rs-vvg.blogspot.tw/2010/08/simd-etudes.html )
+		const float32x4_t q_inv0 = vrecpeq_f32( rhs );
+		const float32x4_t q_step0 = vrecpsq_f32( q_inv0, rhs );
+		const float32x4_t q_inv1 = vmulq_f32( q_step0, q_inv0 );
+		return vmulq_f32( lhs, q_inv1 );		 
+#else
+        float _lhs[4]; lhs.store(_lhs);
+        float _rhs[4]; rhs.store(_rhs);
+        return simd4f(_lhs[0]/_rhs[0],
+                      _lhs[1]/_rhs[1],
+                      _lhs[2]/_rhs[2],
+                      _lhs[3]/_rhs[3]);
+#endif
 #else
         return simd4f(lhs[0]/rhs[0],
                       lhs[1]/rhs[1],
@@ -246,7 +348,7 @@ namespace dlib
 #endif
     }
     inline simd4f& operator/= (simd4f& lhs, const simd4f& rhs) 
-    { lhs = lhs / rhs; return lhs; }
+    { return lhs = lhs / rhs; return lhs;}
 
 // ----------------------------------------------------------------------------------------
 
@@ -254,6 +356,17 @@ namespace dlib
     { 
 #ifdef DLIB_HAVE_SSE2
         return _mm_cmpeq_ps(lhs, rhs); 
+#elif defined(DLIB_HAVE_NEON)
+#if 0
+float _lhs[4]; lhs.store(_lhs);
+        float _rhs[4]; rhs.store(_rhs);
+        return simd4f_bool(_lhs[0]==_rhs[0],
+                      _lhs[1]==_rhs[1],
+                      _lhs[2]==_rhs[2],
+                      _lhs[3]==_rhs[3]);
+#else
+		return (float32x4_t)vceqq_f32(lhs, rhs);
+#endif
 #else
         return simd4f_bool(lhs[0]==rhs[0],
                            lhs[1]==rhs[1],
@@ -268,6 +381,17 @@ namespace dlib
     { 
 #ifdef DLIB_HAVE_SSE2
         return _mm_cmpneq_ps(lhs, rhs); 
+#elif defined(DLIB_HAVE_NEON)
+#if 0
+		float _lhs[4]; lhs.store(_lhs);
+        float _rhs[4]; rhs.store(_rhs);
+        return simd4f_bool(_lhs[0]!=_rhs[0],
+                      _lhs[1]!=_rhs[1],
+                      _lhs[2]!=_rhs[2],
+                      _lhs[3]!=_rhs[3]);
+#else		
+		return (float32x4_t)vmvnq_s32((int32x4_t)vceqq_f32(lhs, rhs));
+#endif
 #else
         return simd4f_bool(lhs[0]!=rhs[0],
                            lhs[1]!=rhs[1],
@@ -282,6 +406,17 @@ namespace dlib
     { 
 #ifdef DLIB_HAVE_SSE2
         return _mm_cmplt_ps(lhs, rhs); 
+#elif defined(DLIB_HAVE_NEON) 
+#if 1
+		return (float32x4_t)vcltq_f32(lhs, rhs);
+#else
+		float _lhs[4]; lhs.store(_lhs);
+		float _rhs[4]; rhs.store(_rhs);
+		return simd4f_bool(_lhs[0]<_rhs[0],
+					  _lhs[1]<_rhs[1],
+					  _lhs[2]<_rhs[2],
+					  _lhs[3]<_rhs[3]);
+#endif
 #else
         return simd4f_bool(lhs[0]<rhs[0],
                            lhs[1]<rhs[1],
@@ -303,6 +438,17 @@ namespace dlib
     { 
 #ifdef DLIB_HAVE_SSE2
         return _mm_cmple_ps(lhs, rhs); 
+#elif defined(DLIB_HAVE_NEON) 
+#if 1
+		return (float32x4_t)vcleq_f32(lhs, rhs);
+#else
+		float _lhs[4]; lhs.store(_lhs);
+		float _rhs[4]; rhs.store(_rhs);
+		return simd4f_bool(_lhs[0]<=_rhs[0],
+					  _lhs[1]<=_rhs[1],
+					  _lhs[2]<=_rhs[2],
+					  _lhs[3]<=_rhs[3]);
+#endif
 #else
         return simd4f_bool(lhs[0]<=rhs[0],
                            lhs[1]<=rhs[1],
@@ -324,6 +470,8 @@ namespace dlib
     { 
 #ifdef DLIB_HAVE_SSE2
         return _mm_min_ps(lhs, rhs); 
+#elif defined(DLIB_HAVE_NEON)
+		return vminq_f32(lhs, rhs);
 #else
         return simd4f(std::min(lhs[0],rhs[0]),
                       std::min(lhs[1],rhs[1]),
@@ -338,6 +486,8 @@ namespace dlib
     { 
 #ifdef DLIB_HAVE_SSE2
         return _mm_max_ps(lhs, rhs); 
+#elif defined(DLIB_HAVE_NEON)
+		return vmaxq_f32(lhs, rhs);
 #else
         return simd4f(std::max(lhs[0],rhs[0]),
                       std::max(lhs[1],rhs[1]),
@@ -352,6 +502,17 @@ namespace dlib
     { 
 #ifdef DLIB_HAVE_SSE2
         return _mm_rcp_ps(item); 
+#elif defined(DLIB_HAVE_NEON)
+#if 1
+		float _lhs[4]; item.store(_lhs);
+		return simd4f(1.0f/_lhs[0],
+					  1.0f/_lhs[1],
+					  1.0f/_lhs[2],
+					  1.0f/_lhs[3]);
+#else 
+		float32x4_t recip = vrecpeq_f32(item);
+		return vmulq_f32(recip, vrecpsq_f32(recip, item));
+#endif		
 #else
         return simd4f(1.0f/item[0],
                       1.0f/item[1],
@@ -366,6 +527,16 @@ namespace dlib
     { 
 #ifdef DLIB_HAVE_SSE2
         return _mm_rsqrt_ps(item); 
+#elif defined(DLIB_HAVE_NEON)
+#if 1 // TODO : optz
+		float _lhs[4]; item.store(_lhs);
+		return simd4f(1.0f/std::sqrt(_lhs[0]),
+					  1.0f/std::sqrt(_lhs[1]),
+					  1.0f/std::sqrt(_lhs[2]),
+					  1.0f/std::sqrt(_lhs[3]));
+#else 
+		return vrsqrteq_f32(item);
+#endif
 #else
         return simd4f(1.0f/std::sqrt(item[0]),
                       1.0f/std::sqrt(item[1]),
@@ -388,6 +559,9 @@ namespace dlib
         simd4f temp = _mm_add_ps(item,_mm_movehl_ps(item,item));
         simd4f temp2 = _mm_shuffle_ps(temp,temp,1);
         return _mm_cvtss_f32(_mm_add_ss(temp,temp2));
+#elif defined(DLIB_HAVE_NEON) //TODO : optz 
+		float32x2_t r = vadd_f32(vget_high_f32(item), vget_low_f32(item));
+		return vget_lane_f32(vpadd_f32(r, r), 0);
 #else
         return item[0]+item[1]+item[2]+item[3];
 #endif
@@ -403,13 +577,48 @@ namespace dlib
         return sum(lhs*rhs);
 #endif
     }
-   
+// ----------------------------------------------------------------------------------------
+#if defined(DLIB_HAVE_NEON)
+    inline void simd4f_rsqrt_1iteration(const float32x4_t& v, float32x4_t& estimate) {
+        float32x4_t estimate2 = vmulq_f32(estimate, v);
+        estimate = vmulq_f32(estimate, vrsqrtsq_f32(estimate2, estimate));
+    }
+    
+    inline simd4f simd4f_rsqrt1(simd4f v) {
+        float32x4_t estimate = vrsqrteq_f32(v);
+        simd4f_rsqrt_1iteration(v, estimate);
+        return estimate;
+    }
+    
+    inline simd4f simd4f_reciprocal(simd4f v) {
+        simd4f estimate = vrecpeq_f32(v);
+    //    estimate = vmulq_f32(vrecpsq_f32(estimate, v), estimate);
+    //    estimate = vmulq_f32(vrecpsq_f32(estimate, v), estimate);
+        return estimate;
+    }
+#endif
 // ----------------------------------------------------------------------------------------
 
-    inline simd4f sqrt(const simd4f& item)
-    {
+
+inline simd4f sqrt(const simd4f& item)
+{
 #ifdef DLIB_HAVE_SSE2
         return _mm_sqrt_ps(item);
+#elif defined(DLIB_HAVE_NEON)
+#if 1 //TODO: optz
+        return vreinterpretq_f32_u32(vandq_u32( vtstq_u32(vreinterpretq_u32_f32(item),
+                                                          vreinterpretq_u32_f32(item)),
+                                               vreinterpretq_u32_f32(
+                                               simd4f_reciprocal(simd4f_rsqrt1(item)))
+                                               )
+                                     );
+#else
+		float _lhs[4]; item.store(_lhs);
+		return simd4f(std::sqrt(_lhs[0]),
+					  std::sqrt(_lhs[1]),
+					  std::sqrt(_lhs[2]),
+					  std::sqrt(_lhs[3]));
+#endif		
 #else
         return simd4f(std::sqrt(item[0]),
                       std::sqrt(item[1]),
@@ -424,7 +633,7 @@ namespace dlib
     {
 #ifdef DLIB_HAVE_SSE41
         return _mm_ceil_ps(item);
-#elif defined(DLIB_HAVE_SSE2)
+#elif defined(DLIB_HAVE_SSE2) || defined(DLIB_HAVE_NEON)
         float temp[4];
         item.store(temp);
         temp[0] = std::ceil(temp[0]);
@@ -448,7 +657,7 @@ namespace dlib
     {
 #ifdef DLIB_HAVE_SSE41
         return _mm_floor_ps(item);
-#elif defined(DLIB_HAVE_SSE2)
+#elif defined(DLIB_HAVE_SSE2) || defined(DLIB_HAVE_NEON)
         float temp[4];
         item.store(temp);
         temp[0] = std::floor(temp[0]);
@@ -475,6 +684,25 @@ namespace dlib
         return _mm_blendv_ps(b,a,cmp);
 #elif defined(DLIB_HAVE_SSE2)
         return _mm_or_ps(_mm_and_ps(cmp,a) , _mm_andnot_ps(cmp,b));
+#elif defined(DLIB_HAVE_NEON)
+#if 1 
+		//simd4f cmp1(cmp);
+		//simd4f r1 = vandq_s32((int32x4_t)cmp,(int32x4_t)((float32x4_t)a));
+		//simd4f r2 = vbicq_s32((int32x4_t)((float32x4_t)b), (int32x4_t)cmp);
+		//std::cout << " cmp1 = " << cmp1 << " a = " << a << " b = " << b << std::endl;
+		//std::cout << " r1 = " << r1 << " r2 = " << r2 << std::endl;
+		return (float32x4_t)vorrq_s32(
+		vandq_s32((int32x4_t)((float32x4_t)cmp),(int32x4_t)((float32x4_t)a)) , 
+		vbicq_s32((int32x4_t)((float32x4_t)b), (int32x4_t)((float32x4_t)cmp)));
+#else
+		simd4f v(cmp);
+		float _cmp[4]; v.store(_cmp);
+		return simd4f(_cmp[0]?a[0]:b[0],
+					  _cmp[1]?a[1]:b[1],
+					  _cmp[2]?a[2]:b[2],
+					  _cmp[3]?a[3]:b[3]);
+#endif
+
 #else
         return simd4f(cmp[0]?a[0]:b[0],
                       cmp[1]?a[1]:b[1],
