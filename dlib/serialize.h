@@ -1505,11 +1505,9 @@ namespace dlib
                 throw serialization_error("Unable to open " + filename + " for reading.");
         }
 
-        explicit proxy_deserialize (
-                std::istream* ins
-        )
+        explicit proxy_deserialize (dlib::shared_ptr<std::istream> ins)
         {
-            fin.reset(ins);
+            fin = ins;
             if (!(*fin))
                 throw serialization_error("Unable to swap pointers for input stream.");
         }
@@ -1529,7 +1527,7 @@ namespace dlib
     { return proxy_serialize(filename); }
     inline proxy_deserialize deserialize(const std::string& filename)
     { return proxy_deserialize(filename); }
-    inline proxy_deserialize deserialize(std::istream* ins)
+    inline proxy_deserialize deserialize(dlib::shared_ptr<std::istream> ins)
     { return proxy_deserialize(ins); }
 
 // ----------------------------------------------------------------------------------------
